@@ -4,6 +4,7 @@
 #include "SABER/LeakChecker.h"
 #include "SVF-FE/PAGBuilder.h"
 
+# include "ReducedICFG.hpp"
 #include <unordered_set>
 #include <string>
 
@@ -12,10 +13,6 @@ using namespace llvm;
 using namespace std;
 
 static llvm::cl::opt<std::string> InputFilename(cl::Positional, llvm::cl::desc("<input bitcode>"), llvm::cl::init("-"));
-
-void icfgDFS(ICFGNode* node, ICFG* icfg, unordered_set<NodeID> visited) {
-	return;
-}
 
 void visitAllPaths(ICFGNode* node, ICFG* icfg, unordered_set<NodeID>& visited, int depth) {
 	NodeID id = node->getId();
@@ -53,6 +50,20 @@ void icfgFullDFS(ICFG* icfg) {
 	}
 }
 
+
+void getAllStartPoints(ICFG* icfg) {
+	int counter = 1;
+	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
+		ICFGNode* node = i->second;
+		if (!node->hasIncomingEdge()) {
+			unordered_set<NodeID> visited;
+			SVFUtil::outs() << "STARTPOINT COUNTER: " << counter << "\n";
+			visitAllPaths(node, icfg, visited, 0);
+			counter++;
+		}
+	}
+}
+
 int main(int argc, char ** argv) {
 
 	int arg_num = 0;
@@ -60,6 +71,8 @@ int main(int argc, char ** argv) {
 	std::vector<std::string> moduleNameVec;
 	SVFUtil::processArguments(argc, argv, arg_num, arg_value, moduleNameVec);
 	cl::ParseCommandLineOptions(arg_num, arg_value, "Reduced Code Graph Generation\n");
+
+	SVFUtil::outs() << arg_num << " " << arg_value[1] << "\n";
 
 	SVFModule* svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(moduleNameVec);
 
@@ -93,7 +106,7 @@ int main(int argc, char ** argv) {
 	//     }
 	// }
 
-	icfgFullDFS(icfg);
+
 
 	return 0;
 }
