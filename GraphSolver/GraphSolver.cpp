@@ -1,112 +1,149 @@
 #include "SVF-FE/LLVMUtil.h"
 #include "Graphs/SVFG.h"
 #include "WPA/Andersen.h"
-#include "SABER/LeakChecker.h"
 #include "SVF-FE/PAGBuilder.h"
 
-# include "ReducedICFG.hpp"
+#include "ReducedICFG.hpp"
+#include "Helper.hpp"
+#include <vector>
 #include <unordered_set>
 #include <string>
+#include <fstream>
+#include <stdexcept>
 
 using namespace SVF;
 using namespace llvm;
 using namespace std;
 
-static llvm::cl::opt<std::string> InputFilename(cl::Positional, llvm::cl::desc("<input bitcode>"), llvm::cl::init("-"));
+unordered_set<string> getSeedVariableNamesFromFile(const char* filename) {
+	ifstream F(filename);
+	if (!F.is_open())
+    {
+        throw std::invalid_argument(string("Error opening file for reading: ") + string(filename));
+    }
 
-void visitAllPaths(ICFGNode* node, ICFG* icfg, unordered_set<NodeID>& visited, int depth) {
-	NodeID id = node->getId();
-	visited.insert(id);
-	if (!node->hasOutgoingEdge()) {
-		SVFUtil::outs() << depth << "DEPTH: END POINT REACHED:" << node->toString() << "\n";
-	} else {
-		SVFUtil::outs() << depth << "DEPTH: " << node->toString() << "\n";
+	string varName;
+	unordered_set<string> seedVariables;
+
+	while (getline(F, varName)) {
+		seedVariables.insert(varName);
 	}
 
-	// Get Child Nodes
-	for(ICFGEdge* edge : node->getOutEdges()){
-		ICFGNode* dst = edge->getDstNode();
-		NodeID dstID = dst->getId();
-		if (visited.find(dstID) == visited.end()) {
-			visitAllPaths(dst, icfg, visited, depth+1);
-		} 
-		// else {
-		// 	SVFUtil::outs() << "ALREADY VISITED: " << dstID << "\n";
-		// }
-	}
-	visited.erase(id);
+	F.close();
+	return seedVariables;
 }
 
-void icfgFullDFS(ICFG* icfg) {
-	int dfsCounter = 1;
-	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
-		ICFGNode* node = i->second;
-		if (!node->hasIncomingEdge()) {
-			unordered_set<NodeID> visited;
-			SVFUtil::outs() << "ICFG DFS COUNTER: " << dfsCounter << "\n";
-			visitAllPaths(node, icfg, visited, 0);
-			dfsCounter++;
+bool isNodeOfInterest(VFGNode* sNode, unordered_set<string>& seedVariables) {
+	const ICFGNode* iNode = sNode->getICFGNode();
+	if (!IntraBlockNode::classof(iNode)) return false;
+	const IntraBlockNode* ibNode = SVFUtil::dyn_cast<IntraBlockNode>(iNode);
+	const Instruction* sInst = ibNode->getInst();
+
+	if (sInst->hasName()) {
+		if (seedVariables.find(sInst->getName().data()) != seedVariables.end()) return true;
+	}
+
+	if (sInst == nullptr) return false; 
+	int operandNum = sInst->getNumOperands();
+	for (int i=0; i<operandNum; i++) {
+		Value* operand = sInst->getOperand(i);
+		if (operand->hasName()) {
+			if (seedVariables.find(operand->getName().data()) != seedVariables.end()) return true;
 		}
 	}
+	return false;
 }
 
+void forwardDfs(VFGNode* sNode, unordered_set<VFGNode*>& visited, unordered_set<VFGNode*>& nodesToKeep) {
+	visited.insert(sNode);
+	nodesToKeep.insert(sNode);
+	for (VFGEdge* sEdge : sNode->getOutEdges()) {
+		VFGNode* dst = sEdge->getDstNode();
+		// Verify this condition
+		if (visited.find(dst) == visited.end() && nodesToKeep.find(dst) == nodesToKeep.end()) {
+			forwardDfs(dst, visited, nodesToKeep);
+		} 
+	}
+}
 
-void getAllStartPoints(ICFG* icfg) {
+void backwardDfs(VFGNode* sNode, unordered_set<VFGNode*>& visited, unordered_set<VFGNode*>& nodesToKeep) {
+	visited.insert(sNode);
+	nodesToKeep.insert(sNode);
+	for (VFGEdge* sEdge : sNode->getInEdges()) {
+		VFGNode* src = sEdge->getSrcNode();
+		if (visited.find(src) == visited.end() && nodesToKeep.find(src) == nodesToKeep.end()) {
+			backwardDfs(src, visited, nodesToKeep);
+		} 
+	}
+}
+
+void pruneSVFGNodes(SVFG* svfg, unordered_set<string>& seedVariables) {
+	SVFUtil::outs() << "Total number of Nodes: " << svfg->getSVFGNodeNum() << "\n";
+	unordered_set<VFGNode*> nodesToKeep;
 	int counter = 1;
-	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
-		ICFGNode* node = i->second;
-		if (!node->hasIncomingEdge()) {
-			unordered_set<NodeID> visited;
-			SVFUtil::outs() << "STARTPOINT COUNTER: " << counter << "\n";
-			visitAllPaths(node, icfg, visited, 0);
+	for(VFG::iterator i = svfg->begin(); i != svfg->end(); i++) {
+		VFGNode* sNode = i->second;
+		if (isNodeOfInterest(sNode, seedVariables)) {
+			SVFUtil::outs() << "Node of Interest: " << counter << "\n";
+			SVFUtil::outs() << sNode->toString() << "\n";
+			unordered_set<VFGNode*> visited1;
+			forwardDfs(sNode, visited1, nodesToKeep);
+			unordered_set<VFGNode*> visited2;
+			backwardDfs(sNode, visited2, nodesToKeep);
 			counter++;
+		}
+	}
+
+	SVFUtil::outs() << "Removal Started" << "\n";
+	unordered_set<VFGNode*> nodesToRemove;
+	for(VFG::iterator i = svfg->begin(); i != svfg->end(); i++) {
+		VFGNode* sNode = i->second;
+		if (nodesToKeep.find(sNode) == nodesToKeep.end()) nodesToRemove.insert(sNode);
+	}
+
+	SVFUtil::outs() << "Number of Nodes to keep: " << nodesToKeep.size() << "\n";
+	SVFUtil::outs() << "Number of Nodes to remove: " << nodesToRemove.size() << "\n";
+
+
+	for (VFGNode* sNode : nodesToRemove) {
+		if (nodesToRemove.find(sNode) != nodesToRemove.end()) {
+			for (VFGEdge* sEdge : sNode->getInEdges()) {
+				svfg->removeSVFGEdge(sEdge);
+			}
+			for (VFGEdge* sEdge : sNode->getOutEdges()) {
+				svfg->removeSVFGEdge(sEdge);
+			}
+			svfg->removeSVFGNode(sNode);
 		}
 	}
 }
 
 int main(int argc, char ** argv) {
-
+	// Hack to limit SVF's processing cmdline args to just first argument 
 	int arg_num = 0;
-	char **arg_value = new char*[argc];
+	char **arg_value = new char*[2];
 	std::vector<std::string> moduleNameVec;
-	SVFUtil::processArguments(argc, argv, arg_num, arg_value, moduleNameVec);
+	SVFUtil::processArguments(2, argv, arg_num, arg_value, moduleNameVec);
 	cl::ParseCommandLineOptions(arg_num, arg_value, "Reduced Code Graph Generation\n");
 
-	SVFUtil::outs() << arg_num << " " << arg_value[1] << "\n";
+	// TODO: Add command line input check later
 
 	SVFModule* svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(moduleNameVec);
-
 	/// Build Program Assignment Graph (PAG)
 	PAGBuilder builder;
 	PAG *pag = builder.build(svfModule);
-	// dump pag
-	// pag->dump(svfModule->getModuleIdentifier() + ".pag");
 	/// ICFG
 	ICFG *icfg = pag->getICFG();
-	// dump icfg
-	// icfg->dump(svfModule->getModuleIdentifier() + ".icfg");
+	/// Create Andersen's pointer analysis
+    Andersen* ander = AndersenWaveDiff::createAndersenWaveDiff(pag);
+	/// Sparse value-flow graph (SVFG)
+    SVFGBuilder svfBuilder;
+    SVFG* svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
 
-	// // iterate each ICFGNode on ICFG
-	// for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++)
-	// {
-	// 	ICFGNode *n = i->second;
-	// 	SVFUtil::outs() << n->toString() << "\n";
-	// 	for(ICFGEdge* edge : n->getOutEdges()){
-	// 		SVFUtil::outs() << edge->toString() << "\n";
-	// 	}
-	// }
-
-	// // iterate each PAGNode on PAG
-	// for(PAG::iterator p = pag->begin(); p != pag->end();p++)
-	// {
-	//     PAGNode *n = p->second;
-	//     SVFUtil::outs() << n->toString() << "\n";
-	//     for(PAGEdge* edge : n->getOutEdges()){
-	//         SVFUtil::outs() << edge->toString() << "\n";
-	//     }
-	// }
-
-
+	unordered_set<string> seedVariables = getSeedVariableNamesFromFile(argv[2]);
+	pruneSVFGNodes(svfg, seedVariables);
+	SVFUtil::outs() << "Dumping" << "\n";
+	svfg->dump("reduced_SVFG");
 
 	return 0;
 }

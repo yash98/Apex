@@ -1,0 +1,4 @@
+_alt_min
+baro_alt
+_armed
+_thrust_error_angle

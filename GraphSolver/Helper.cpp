@@ -1,7 +1,5 @@
 #include "Helper.hpp"
 
-#include <vector>
-
 vector<ICFGNode*> getAllICFGStartPoints(ICFG* icfg) {
 	int counter = 1;
 	vector<ICFGNode*> startingPoints;
@@ -24,7 +22,7 @@ Value* getFirstOperandFromPAGNode(PAGNode* pNode) {
 	const Instruction* pInst = SVFUtil::dyn_cast<Instruction>(pVal);
 
 	if (pInst == nullptr) return nullptr; 
-	if (pInst->getNumOperands() <= 0) return nullptr;
-	Value* operand0 = pInst->getOperand(0);
+	if (pInst->getNumOperands() <= 1) return nullptr;
+	Value* operand0 = pInst->getOperand(1);
 	return operand0;
 }
