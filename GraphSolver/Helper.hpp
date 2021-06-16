@@ -1,5 +1,5 @@
-#ifndef REDUCED_ICFG_H
-#define REDUCED_ICFG_H
+#ifndef HELPER_H
+#define HELPER_H
 
 #include "Graphs/ICFG.h"
 
