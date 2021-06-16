@@ -17,3 +17,14 @@ vector<ICFGNode*> getAllICFGStartPoints(ICFG* icfg) {
 	return startingPoints;
 }
 
+// Gets Value of first operand if it can otherwise nulltpr
+Value* getFirstOperandFromPAGNode(PAGNode* pNode) {
+	if (!pNode->hasValue()) return nullptr;
+	const Value* pVal = pNode->getValue();
+	const Instruction* pInst = SVFUtil::dyn_cast<Instruction>(pVal);
+
+	if (pInst == nullptr) return nullptr; 
+	if (pInst->getNumOperands() <= 0) return nullptr;
+	Value* operand0 = pInst->getOperand(0);
+	return operand0;
+}
