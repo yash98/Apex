@@ -15,6 +15,8 @@ using namespace SVF;
 using namespace llvm;
 using namespace std;
 
+static map<uint, int> opCodeRelevantOperand;
+
 unordered_set<string> getSeedVariableNamesFromFile(const char* filename) {
 	ifstream F(filename);
 	if (!F.is_open())
@@ -37,18 +39,21 @@ string isNodeOfInterest(ICFGNode* iNode, unordered_set<string>& seedVariables) {
 	if (!IntraBlockNode::classof(iNode)) return "";
 	const IntraBlockNode* ibNode = SVFUtil::dyn_cast<IntraBlockNode>(iNode);
 	const Instruction* inst = ibNode->getInst();
+	if (inst == nullptr) return "";
 
-	if (inst->hasName()) {
-		unordered_set<string>::iterator foundAt = seedVariables.find(inst->getName().data());
-		if (foundAt != seedVariables.end()) {
-			return *foundAt;
+	uint opCode = inst->getOpcode();
+	if (opCodeRelevantOperand.find(opCode) == opCodeRelevantOperand.end()) return "";
+	int relevantOperand = opCodeRelevantOperand[opCode];
+
+	if (relevantOperand < 0) {
+		if (inst->hasName()) {
+			unordered_set<string>::iterator foundAt = seedVariables.find(inst->getName().data());
+			if (foundAt != seedVariables.end()) {
+				return *foundAt;
+			}
 		}
-	}
-
-	if (inst == nullptr) return ""; 
-	int operandNum = inst->getNumOperands();
-	for (int i=0; i<operandNum; i++) {
-		Value* operand = inst->getOperand(i);
+	} else {
+		Value* operand = inst->getOperand(relevantOperand);
 		if (operand->hasName()) {
 			unordered_set<string>::iterator foundAt = seedVariables.find(operand->getName().data());
 			if (foundAt != seedVariables.end()) {
@@ -59,30 +64,51 @@ string isNodeOfInterest(ICFGNode* iNode, unordered_set<string>& seedVariables) {
 	return "";
 }
 
-void forwardDfs(ICFGNode* iNode, unordered_set<ICFGNode*>& visited, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
-	visited.insert(iNode);
-	string voi = isNodeOfInterest(iNode, seedVariables);
-	if (isNodeOfInterest(iNode, seedVariables) != "") variableOfInterestEncountered.insert(voi);
+bool forwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNode*>& visited, unordered_set<ICFGNode*>& usefulNodes, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
+	if (depth == maxDepth) return false;
+	// visited.insert(iNode);
 
-	for (ICFGEdge* iEdge : iNode->getInEdges()) {
-		ICFGNode* dst = iEdge->getDstNode();
-		if (visited.find(dst) == visited.end()) {
-			forwardDfs(dst, visited, variableOfInterestEncountered, seedVariables);
-		} 
+	bool foundVOI = false;
+	string voi = isNodeOfInterest(iNode, seedVariables);
+	if (isNodeOfInterest(iNode, seedVariables) != "") {
+		foundVOI = true;
+		variableOfInterestEncountered.insert(voi);
 	}
+
+	for (ICFGEdge* iEdge : iNode->getOutEdges()) {
+		ICFGNode* dst = iEdge->getDstNode();
+		// if (visited.find(dst) == visited.end()) {
+			bool childFoundVOI = forwardDfs(dst, depth+1, maxDepth, visited, usefulNodes, variableOfInterestEncountered, seedVariables);
+			foundVOI = foundVOI | childFoundVOI;
+		// } 
+	}
+	
+	if (foundVOI) usefulNodes.insert(iNode);
+	return foundVOI;
 }
 
-void backwardDfs(ICFGNode* iNode, unordered_set<ICFGNode*>& visited, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
-	visited.insert(iNode);
+bool backwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNode*>& visited, unordered_set<ICFGNode*>& usefulNodes, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
+	// 0 to maxDepth -1
+	if (depth == maxDepth) return false;
+	// visited.insert(iNode);
+
+	bool foundVOI = false;
 	string voi = isNodeOfInterest(iNode, seedVariables);
-	if (isNodeOfInterest(iNode, seedVariables) != "") variableOfInterestEncountered.insert(voi);
+	if (isNodeOfInterest(iNode, seedVariables) != "") {
+		foundVOI = true;
+		variableOfInterestEncountered.insert(voi);
+	}
 
 	for (ICFGEdge* iEdge : iNode->getInEdges()) {
 		ICFGNode* src = iEdge->getSrcNode();
-		if (visited.find(src) == visited.end()) {
-			backwardDfs(src, visited, variableOfInterestEncountered, seedVariables);
-		} 
+		// if (visited.find(src) == visited.end()) {
+			bool childFoundVOI = backwardDfs(src, depth+1, maxDepth, visited, usefulNodes, variableOfInterestEncountered, seedVariables);
+			foundVOI = foundVOI | childFoundVOI;
+		// }
 	}
+	
+	if (foundVOI) usefulNodes.insert(iNode);
+	return foundVOI;
 }
 
 void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
@@ -90,27 +116,30 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 	map<ICFGNode*, unordered_set<ICFGNode*>> nodeOfInterestComponent;
 	map<ICFGNode*, unordered_set<string>> varOfInterestInComponent;
 	int counter = 1;
+	int dfsMaxDepth = 29;
 	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
 		ICFGNode* iNode = i->second;
 		if (isNodeOfInterest(iNode, seedVariables) != "") {
 			SVFUtil::outs() << "Node of Interest: " << counter << "\n";
 			SVFUtil::outs() << iNode->toString() << "\n";
 			unordered_set<ICFGNode*> visited1;
+			unordered_set<ICFGNode*> usefulNodes1;
 			unordered_set<string> voie1;
-			forwardDfs(iNode, visited1, voie1, seedVariables);
-			// unordered_set<ICFGNode*> visited2;
-			// unordered_set<string> voie2;
-			// backwardDfs(iNode, visited2, voie2, seedVariables);
+			forwardDfs(iNode, 0, dfsMaxDepth, visited1, usefulNodes1, voie1, seedVariables);
+			unordered_set<ICFGNode*> visited2;
+			unordered_set<ICFGNode*> usefulNodes2;
+			unordered_set<string> voie2;
+			backwardDfs(iNode, 0, dfsMaxDepth, visited2, usefulNodes2, voie2, seedVariables);
 			
-			// visited1.insert(visited2.begin(), visited2.end());
-			// voie1.insert(voie2.begin(), voie2.end());
-			nodeOfInterestComponent[iNode] = visited1;
+			usefulNodes1.insert(usefulNodes2.begin(), usefulNodes2.end());
+			voie1.insert(voie2.begin(), voie2.end());
+			nodeOfInterestComponent[iNode] = usefulNodes1;
 			varOfInterestInComponent[iNode] = voie1;
 			counter++;
 		}
 	}
 
-	SVFUtil::outs() << "Maximal VOI components" << "\n";
+	SVFUtil::outs() << "Starting Maximal VOI components" << "\n";
 	int maxNumVOIE = 0;
 	for (map<ICFGNode*, unordered_set<string>>::iterator it = varOfInterestInComponent.begin(); it!=varOfInterestInComponent.end(); it++) {
 		int componentNumVOI = it->second.size();
@@ -125,6 +154,9 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 		int componentNumVOI = it->second.size();
 		if (maxNumVOIE == componentNumVOI) {
 			unordered_set<ICFGNode*> component = nodeOfInterestComponent[it->first];
+			SVFUtil::outs() << it->first << " ";
+			for (string varName: it->second) SVFUtil::outs() << varName << " ";
+			SVFUtil::outs() << component.size() << "\n";
 			nodesToKeep.insert(component.begin(), component.end());
 		}
 	}
@@ -139,13 +171,19 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 	SVFUtil::outs() << "Number of Nodes to keep: " << nodesToKeep.size() << "\n";
 	SVFUtil::outs() << "Number of Nodes to remove: " << nodesToRemove.size() << "\n";
 
-
 	for (ICFGNode* iNode : nodesToRemove) {
-		for (ICFGEdge* iEdge : iNode->getInEdges()) {
-			icfg->removeICFGEdge(iEdge);
+		ICFGNode i = *iNode;
+		unordered_set<ICFGEdge*> inEdgesToRemove;
+		auto inEdges = iNode->getInEdges();
+		inEdgesToRemove.insert(inEdges.begin(), inEdges.end());
+		for (ICFGEdge* iEdge : inEdgesToRemove) {
+				icfg->removeICFGEdge(iEdge);
 		}
-		for (ICFGEdge* iEdge : iNode->getOutEdges()) {
-			icfg->removeICFGEdge(iEdge);
+		unordered_set<ICFGEdge*> outEdgesToRemove;
+		auto outEdges = iNode->getOutEdges();
+		outEdgesToRemove.insert(outEdges.begin(), outEdges.end());
+		for (ICFGEdge* iEdge : outEdgesToRemove) {
+				icfg->removeICFGEdge(iEdge);
 		}
 		icfg->removeICFGNode(iNode);
 	}
@@ -166,10 +204,12 @@ int main(int argc, char ** argv) {
     // SVFGBuilder svfBuilder;
     // SVFG* svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
 
+	opCodeRelevantOperand = {{Instruction::Alloca, -1}, {Instruction::Load, -1}, {Instruction::Store, 1}, {Instruction::GetElementPtr, -1}};
+
 	unordered_set<string> seedVariables = getSeedVariableNamesFromFile(argv[2]);
 	pruneICFGNodes(icfg, seedVariables);
 	SVFUtil::outs() << "Dumping" << "\n";
-	// svfg->dump("reduced-SVFG-less");
+	icfg->dump("ICFG-dfs29-useful-prune-exhaustive");
 
 	return 0;
 }
