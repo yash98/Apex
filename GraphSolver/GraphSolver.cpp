@@ -98,12 +98,12 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 			unordered_set<ICFGNode*> visited1;
 			unordered_set<string> voie1;
 			forwardDfs(iNode, visited1, voie1, seedVariables);
-			unordered_set<ICFGNode*> visited2;
-			unordered_set<string> voie2;
-			backwardDfs(iNode, visited2, voie2, seedVariables);
+			// unordered_set<ICFGNode*> visited2;
+			// unordered_set<string> voie2;
+			// backwardDfs(iNode, visited2, voie2, seedVariables);
 			
-			visited1.insert(visited2.begin(), visited2.end());
-			voie1.insert(voie2.begin(), voie2.end());
+			// visited1.insert(visited2.begin(), visited2.end());
+			// voie1.insert(voie2.begin(), voie2.end());
 			nodeOfInterestComponent[iNode] = visited1;
 			varOfInterestInComponent[iNode] = voie1;
 			counter++;
@@ -141,28 +141,19 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 
 
 	for (ICFGNode* iNode : nodesToRemove) {
-		if (nodesToRemove.find(iNode) != nodesToRemove.end()) {
-			for (ICFGEdge* iEdge : iNode->getInEdges()) {
-				icfg->removeICFGEdge(iEdge);
-			}
-			for (ICFGEdge* iEdge : iNode->getOutEdges()) {
-				icfg->removeICFGEdge(iEdge);
-			}
-			icfg->removeICFGNode(iNode);
+		for (ICFGEdge* iEdge : iNode->getInEdges()) {
+			icfg->removeICFGEdge(iEdge);
 		}
+		for (ICFGEdge* iEdge : iNode->getOutEdges()) {
+			icfg->removeICFGEdge(iEdge);
+		}
+		icfg->removeICFGNode(iNode);
 	}
 }
 
 int main(int argc, char ** argv) {
-	// Hack to limit SVF's processing cmdline args to just first argument 
-	int arg_num = 0;
-	char **arg_value = new char*[2];
-	std::vector<std::string> moduleNameVec;
-	SVFUtil::processArguments(2, argv, arg_num, arg_value, moduleNameVec);
-	cl::ParseCommandLineOptions(arg_num, arg_value, "Reduced Code Graph Generation\n");
-
-	// TODO: Add command line input check later
-
+	if (argc < 3) return 0;
+	vector<std::string> moduleNameVec = {argv[1]};
 	SVFModule* svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(moduleNameVec);
 	/// Build Program Assignment Graph (PAG)
 	PAGBuilder builder;
