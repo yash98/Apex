@@ -3,10 +3,10 @@
 #include "WPA/Andersen.h"
 #include "SVF-FE/PAGBuilder.h"
 
-#include "ReducedICFG.hpp"
 #include "Helper.hpp"
 #include <vector>
 #include <unordered_set>
+#include <map>
 #include <string>
 #include <fstream>
 #include <stdexcept>
@@ -33,87 +33,122 @@ unordered_set<string> getSeedVariableNamesFromFile(const char* filename) {
 	return seedVariables;
 }
 
-bool isNodeOfInterest(VFGNode* sNode, unordered_set<string>& seedVariables) {
-	const ICFGNode* iNode = sNode->getICFGNode();
-	if (!IntraBlockNode::classof(iNode)) return false;
+string isNodeOfInterest(ICFGNode* iNode, unordered_set<string>& seedVariables) {
+	if (!IntraBlockNode::classof(iNode)) return "";
 	const IntraBlockNode* ibNode = SVFUtil::dyn_cast<IntraBlockNode>(iNode);
-	const Instruction* sInst = ibNode->getInst();
+	const Instruction* inst = ibNode->getInst();
 
-	if (sInst->hasName()) {
-		if (seedVariables.find(sInst->getName().data()) != seedVariables.end()) return true;
-	}
-
-	if (sInst == nullptr) return false; 
-	int operandNum = sInst->getNumOperands();
-	for (int i=0; i<operandNum; i++) {
-		Value* operand = sInst->getOperand(i);
-		if (operand->hasName()) {
-			if (seedVariables.find(operand->getName().data()) != seedVariables.end()) return true;
+	if (inst->hasName()) {
+		unordered_set<string>::iterator foundAt = seedVariables.find(inst->getName().data());
+		if (foundAt != seedVariables.end()) {
+			return *foundAt;
 		}
 	}
-	return false;
+
+	if (inst == nullptr) return ""; 
+	int operandNum = inst->getNumOperands();
+	for (int i=0; i<operandNum; i++) {
+		Value* operand = inst->getOperand(i);
+		if (operand->hasName()) {
+			unordered_set<string>::iterator foundAt = seedVariables.find(operand->getName().data());
+			if (foundAt != seedVariables.end()) {
+				return *foundAt;
+			}
+		}
+	}
+	return "";
 }
 
-void forwardDfs(VFGNode* sNode, unordered_set<VFGNode*>& visited, unordered_set<VFGNode*>& nodesToKeep) {
-	visited.insert(sNode);
-	nodesToKeep.insert(sNode);
-	for (VFGEdge* sEdge : sNode->getOutEdges()) {
-		VFGNode* dst = sEdge->getDstNode();
-		// Verify this condition
-		if (visited.find(dst) == visited.end() && nodesToKeep.find(dst) == nodesToKeep.end()) {
-			forwardDfs(dst, visited, nodesToKeep);
+void forwardDfs(ICFGNode* iNode, unordered_set<ICFGNode*>& visited, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
+	visited.insert(iNode);
+	string voi = isNodeOfInterest(iNode, seedVariables);
+	if (isNodeOfInterest(iNode, seedVariables) != "") variableOfInterestEncountered.insert(voi);
+
+	for (ICFGEdge* iEdge : iNode->getInEdges()) {
+		ICFGNode* dst = iEdge->getDstNode();
+		if (visited.find(dst) == visited.end()) {
+			forwardDfs(dst, visited, variableOfInterestEncountered, seedVariables);
 		} 
 	}
 }
 
-void backwardDfs(VFGNode* sNode, unordered_set<VFGNode*>& visited, unordered_set<VFGNode*>& nodesToKeep) {
-	visited.insert(sNode);
-	nodesToKeep.insert(sNode);
-	for (VFGEdge* sEdge : sNode->getInEdges()) {
-		VFGNode* src = sEdge->getSrcNode();
-		if (visited.find(src) == visited.end() && nodesToKeep.find(src) == nodesToKeep.end()) {
-			backwardDfs(src, visited, nodesToKeep);
+void backwardDfs(ICFGNode* iNode, unordered_set<ICFGNode*>& visited, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
+	visited.insert(iNode);
+	string voi = isNodeOfInterest(iNode, seedVariables);
+	if (isNodeOfInterest(iNode, seedVariables) != "") variableOfInterestEncountered.insert(voi);
+
+	for (ICFGEdge* iEdge : iNode->getInEdges()) {
+		ICFGNode* src = iEdge->getSrcNode();
+		if (visited.find(src) == visited.end()) {
+			backwardDfs(src, visited, variableOfInterestEncountered, seedVariables);
 		} 
 	}
 }
 
-void pruneSVFGNodes(SVFG* svfg, unordered_set<string>& seedVariables) {
-	SVFUtil::outs() << "Total number of Nodes: " << svfg->getSVFGNodeNum() << "\n";
-	unordered_set<VFGNode*> nodesToKeep;
+void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
+	SVFUtil::outs() << "Total number of Nodes: " << icfg->getTotalNodeNum() << "\n";
+	map<ICFGNode*, unordered_set<ICFGNode*>> nodeOfInterestComponent;
+	map<ICFGNode*, unordered_set<string>> varOfInterestInComponent;
 	int counter = 1;
-	for(VFG::iterator i = svfg->begin(); i != svfg->end(); i++) {
-		VFGNode* sNode = i->second;
-		if (isNodeOfInterest(sNode, seedVariables)) {
+	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
+		ICFGNode* iNode = i->second;
+		if (isNodeOfInterest(iNode, seedVariables) != "") {
 			SVFUtil::outs() << "Node of Interest: " << counter << "\n";
-			SVFUtil::outs() << sNode->toString() << "\n";
-			unordered_set<VFGNode*> visited1;
-			forwardDfs(sNode, visited1, nodesToKeep);
-			unordered_set<VFGNode*> visited2;
-			backwardDfs(sNode, visited2, nodesToKeep);
+			SVFUtil::outs() << iNode->toString() << "\n";
+			unordered_set<ICFGNode*> visited1;
+			unordered_set<string> voie1;
+			forwardDfs(iNode, visited1, voie1, seedVariables);
+			unordered_set<ICFGNode*> visited2;
+			unordered_set<string> voie2;
+			backwardDfs(iNode, visited2, voie2, seedVariables);
+			
+			visited1.insert(visited2.begin(), visited2.end());
+			voie1.insert(voie2.begin(), voie2.end());
+			nodeOfInterestComponent[iNode] = visited1;
+			varOfInterestInComponent[iNode] = voie1;
 			counter++;
 		}
 	}
 
+	SVFUtil::outs() << "Maximal VOI components" << "\n";
+	int maxNumVOIE = 0;
+	for (map<ICFGNode*, unordered_set<string>>::iterator it = varOfInterestInComponent.begin(); it!=varOfInterestInComponent.end(); it++) {
+		int componentNumVOI = it->second.size();
+		if (maxNumVOIE < componentNumVOI) {
+			maxNumVOIE = componentNumVOI;
+		}
+	}
+
+	SVFUtil::outs() << "Max VOI in components: " << maxNumVOIE << "\n";
+	unordered_set<ICFGNode*> nodesToKeep;
+	for (map<ICFGNode*, unordered_set<string>>::iterator it = varOfInterestInComponent.begin(); it!=varOfInterestInComponent.end(); it++) {
+		int componentNumVOI = it->second.size();
+		if (maxNumVOIE == componentNumVOI) {
+			unordered_set<ICFGNode*> component = nodeOfInterestComponent[it->first];
+			nodesToKeep.insert(component.begin(), component.end());
+		}
+	}
+
 	SVFUtil::outs() << "Removal Started" << "\n";
-	unordered_set<VFGNode*> nodesToRemove;
-	for(VFG::iterator i = svfg->begin(); i != svfg->end(); i++) {
-		VFGNode* sNode = i->second;
-		if (nodesToKeep.find(sNode) == nodesToKeep.end()) nodesToRemove.insert(sNode);
+	unordered_set<ICFGNode*> nodesToRemove;
+	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
+		ICFGNode* iNode = i->second;
+		if (nodesToKeep.find(iNode) == nodesToKeep.end()) nodesToRemove.insert(iNode);
 	}
 
 	SVFUtil::outs() << "Number of Nodes to keep: " << nodesToKeep.size() << "\n";
 	SVFUtil::outs() << "Number of Nodes to remove: " << nodesToRemove.size() << "\n";
 
 
-	for (VFGNode* sNode : nodesToRemove) {
-		if (nodesToRemove.find(sNode) != nodesToRemove.end()) {
-			for (VFGEdge* sEdge : sNode->getInEdges()) {
-				svfg->removeSVFGEdge(sEdge);
+	for (ICFGNode* iNode : nodesToRemove) {
+		if (nodesToRemove.find(iNode) != nodesToRemove.end()) {
+			for (ICFGEdge* iEdge : iNode->getInEdges()) {
+				icfg->removeICFGEdge(iEdge);
 			}
-			for (VFGEdge* sEdge : sNode->getOutEdges()) {
-				svfg->removeSVFGEdge(sEdge);
+			for (ICFGEdge* iEdge : iNode->getOutEdges()) {
+				icfg->removeICFGEdge(iEdge);
 			}
-			svfg->removeSVFGNode(sNode);
+			icfg->removeICFGNode(iNode);
 		}
 	}
 }
@@ -135,15 +170,15 @@ int main(int argc, char ** argv) {
 	/// ICFG
 	ICFG *icfg = pag->getICFG();
 	/// Create Andersen's pointer analysis
-    Andersen* ander = AndersenWaveDiff::createAndersenWaveDiff(pag);
+    // Andersen* ander = AndersenWaveDiff::createAndersenWaveDiff(pag);
 	/// Sparse value-flow graph (SVFG)
-    SVFGBuilder svfBuilder;
-    SVFG* svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
+    // SVFGBuilder svfBuilder;
+    // SVFG* svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
 
 	unordered_set<string> seedVariables = getSeedVariableNamesFromFile(argv[2]);
-	pruneSVFGNodes(svfg, seedVariables);
+	pruneICFGNodes(icfg, seedVariables);
 	SVFUtil::outs() << "Dumping" << "\n";
-	svfg->dump("reduced_SVFG");
+	// svfg->dump("reduced-SVFG-less");
 
 	return 0;
 }
