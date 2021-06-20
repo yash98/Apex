@@ -10,6 +10,10 @@
 #include <string>
 #include <fstream>
 #include <stdexcept>
+#include <iomanip>
+#include <ctime>
+ 
+
 
 using namespace SVF;
 using namespace llvm;
@@ -116,9 +120,11 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 	map<ICFGNode*, unordered_set<ICFGNode*>> nodeOfInterestComponent;
 	map<ICFGNode*, unordered_set<string>> varOfInterestInComponent;
 	int counter = 1;
-	int dfsMaxDepth = 29;
+	int dfsMaxDepth = 23;
+	int totalEdgeNum = 0;
 	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
 		ICFGNode* iNode = i->second;
+		totalEdgeNum += iNode->getInEdges().size();
 		if (isNodeOfInterest(iNode, seedVariables) != "") {
 			SVFUtil::outs() << "Node of Interest: " << counter << "\n";
 			SVFUtil::outs() << iNode->toString() << "\n";
@@ -138,6 +144,7 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 			counter++;
 		}
 	}
+	SVFUtil::outs() << "Total number of Edges: " << totalEdgeNum << "\n";
 
 	SVFUtil::outs() << "Starting Maximal VOI components" << "\n";
 	int maxNumVOIE = 0;
@@ -148,6 +155,7 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 		}
 	}
 
+	SVFUtil::outs() << "Depth: " << dfsMaxDepth << "\n";
 	SVFUtil::outs() << "Max VOI in components: " << maxNumVOIE << "\n";
 	unordered_set<ICFGNode*> nodesToKeep;
 	for (map<ICFGNode*, unordered_set<string>>::iterator it = varOfInterestInComponent.begin(); it!=varOfInterestInComponent.end(); it++) {
@@ -163,12 +171,18 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 
 	SVFUtil::outs() << "Removal Started" << "\n";
 	unordered_set<ICFGNode*> nodesToRemove;
+	int nodeKeepCount = 0;
 	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
 		ICFGNode* iNode = i->second;
-		if (nodesToKeep.find(iNode) == nodesToKeep.end()) nodesToRemove.insert(iNode);
+		if (nodesToKeep.find(iNode) == nodesToKeep.end()) {
+			nodesToRemove.insert(iNode);
+		} else {
+			nodeKeepCount += iNode->getInEdges().size();
+		}
 	}
 
 	SVFUtil::outs() << "Number of Nodes to keep: " << nodesToKeep.size() << "\n";
+	SVFUtil::outs() << "Number of Edges to keep: " << nodeKeepCount << "\n";
 	SVFUtil::outs() << "Number of Nodes to remove: " << nodesToRemove.size() << "\n";
 
 	for (ICFGNode* iNode : nodesToRemove) {
@@ -207,7 +221,15 @@ int main(int argc, char ** argv) {
 	opCodeRelevantOperand = {{Instruction::Alloca, -1}, {Instruction::Load, -1}, {Instruction::Store, 1}, {Instruction::GetElementPtr, -1}};
 
 	unordered_set<string> seedVariables = getSeedVariableNamesFromFile(argv[2]);
+
+	time_t start, end;
+	time(&start);
+	ios_base::sync_with_stdio(false);
 	pruneICFGNodes(icfg, seedVariables);
+	time(&end);
+	double time_taken = double(end-start);
+	cout << "Time taken by pruneICFGNodes function is : " << fixed << time_taken << setprecision(5) << " sec " << endl;
+
 	SVFUtil::outs() << "Dumping" << "\n";
 	icfg->dump("ICFG-dfs29-useful-prune-exhaustive");
 
