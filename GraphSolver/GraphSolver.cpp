@@ -221,7 +221,6 @@ int main(int argc, char ** argv) {
 	opCodeRelevantOperand = {{Instruction::Alloca, -1}, {Instruction::Load, -1}, {Instruction::Store, 1}, {Instruction::GetElementPtr, -1}};
 
 	unordered_set<string> seedVariables = getSeedVariableNamesFromFile(argv[2]);
-
 	time_t start, end;
 	time(&start);
 	ios_base::sync_with_stdio(false);
