@@ -176,7 +176,17 @@ int main(int argc, char ** argv) {
     // SVFG* svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
 
 	unordered_set<string> seedVariables = getSeedVariableNamesFromFile(argv[2]);
+	
+	time_t start, end;
+	time(&start);
+	ios_base::sync_with_stdio(false);
 	pruneICFGNodes(icfg, seedVariables);
+	time(&end);
+	double time_taken = double(end-start);
+	cout << "Time taken by pruneICFGNodes function is : " << fixed
+         << time_taken << setprecision(5);
+    cout << " sec " << endl;
+
 	SVFUtil::outs() << "Dumping" << "\n";
 	// svfg->dump("reduced-SVFG-less");
 
