@@ -167,7 +167,7 @@ int iterativeDeepeningPathFinder(ICFG* icfg, unordered_set<string>& seedVariable
 	return maxNumVOIE;
 }
 
-void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
+int pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 	int maxNumVOIEPossible = seedVariables.size();
 	// Binary search
 	int maxVOIEUntilNow = -1;
@@ -252,6 +252,8 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 		}
 		icfg->removeICFGNode(iNode);
 	}
+
+	return upperDepth;
 }
 
 int main(int argc, char ** argv) {
@@ -275,7 +277,7 @@ int main(int argc, char ** argv) {
 	pruneICFGNodes(icfg, seedVariables);
 
 	SVFUtil::outs() << "Dumping" << "\n";
-	icfg->dump("ICFG-dfs29-useful-prune-exhaustive");
+	icfg->dump("reducedICFG");
 
 	return 0;
 }
