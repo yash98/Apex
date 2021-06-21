@@ -69,9 +69,9 @@ string isNodeOfInterest(ICFGNode* iNode, unordered_set<string>& seedVariables) {
 	return "";
 }
 
-bool forwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNode*>& visited, unordered_set<ICFGNode*>& usefulNodes, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
+bool forwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNode*>& visited, unordered_set<ICFGNode*>& usefulNodes, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables, bool preventRevisting) {
 	if (depth == maxDepth) return false;
-	// visited.insert(iNode);
+	if (preventRevisting) visited.insert(iNode);
 
 	bool foundVOI = false;
 	string voi = isNodeOfInterest(iNode, seedVariables);
@@ -82,20 +82,20 @@ bool forwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNode
 
 	for (ICFGEdge* iEdge : iNode->getOutEdges()) {
 		ICFGNode* dst = iEdge->getDstNode();
-		// if (visited.find(dst) == visited.end()) {
-			bool childFoundVOI = forwardDfs(dst, depth+1, maxDepth, visited, usefulNodes, variableOfInterestEncountered, seedVariables);
+		if (!preventRevisting || visited.find(dst) == visited.end()) {
+			bool childFoundVOI = forwardDfs(dst, depth+1, maxDepth, visited, usefulNodes, variableOfInterestEncountered, seedVariables, preventRevisting);
 			foundVOI = foundVOI | childFoundVOI;
-		// } 
+		}
 	}
 	
 	if (foundVOI) usefulNodes.insert(iNode);
 	return foundVOI;
 }
 
-bool backwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNode*>& visited, unordered_set<ICFGNode*>& usefulNodes, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables) {
+bool backwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNode*>& visited, unordered_set<ICFGNode*>& usefulNodes, unordered_set<string>& variableOfInterestEncountered, unordered_set<string>& seedVariables, bool preventRevisting) {
 	// 0 to maxDepth -1
 	if (depth == maxDepth) return false;
-	// visited.insert(iNode);
+	if (preventRevisting) visited.insert(iNode);
 
 	bool foundVOI = false;
 	string voi = isNodeOfInterest(iNode, seedVariables);
@@ -106,37 +106,34 @@ bool backwardDfs(ICFGNode* iNode, int depth, int maxDepth, unordered_set<ICFGNod
 
 	for (ICFGEdge* iEdge : iNode->getInEdges()) {
 		ICFGNode* src = iEdge->getSrcNode();
-		// if (visited.find(src) == visited.end()) {
-			bool childFoundVOI = backwardDfs(src, depth+1, maxDepth, visited, usefulNodes, variableOfInterestEncountered, seedVariables);
+		if (!preventRevisting || visited.find(src) == visited.end()) {
+			bool childFoundVOI = backwardDfs(src, depth+1, maxDepth, visited, usefulNodes, variableOfInterestEncountered, seedVariables, preventRevisting);
 			foundVOI = foundVOI | childFoundVOI;
-		// }
+		}
 	}
 	
 	if (foundVOI) usefulNodes.insert(iNode);
 	return foundVOI;
 }
 
-void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
-	SVFUtil::outs() << "Total number of Nodes: " << icfg->getTotalNodeNum() << "\n";
-	map<ICFGNode*, unordered_set<ICFGNode*>> nodeOfInterestComponent;
-	map<ICFGNode*, unordered_set<string>> varOfInterestInComponent;
+int iterativeDeepeningPathFinder(ICFG* icfg, unordered_set<string>& seedVariables, map<ICFGNode*, unordered_set<ICFGNode*>>& nodeOfInterestComponent, map<ICFGNode*, unordered_set<string>>& varOfInterestInComponent, int dfsMaxDepth, bool preventRevisting) {
+	auto start = chrono::high_resolution_clock::now();
+	ios_base::sync_with_stdio(false);
+
 	int counter = 1;
-	int dfsMaxDepth = 23;
-	int totalEdgeNum = 0;
 	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
 		ICFGNode* iNode = i->second;
-		totalEdgeNum += iNode->getInEdges().size();
 		if (isNodeOfInterest(iNode, seedVariables) != "") {
 			SVFUtil::outs() << "Node of Interest: " << counter << "\n";
 			SVFUtil::outs() << iNode->toString() << "\n";
 			unordered_set<ICFGNode*> visited1;
 			unordered_set<ICFGNode*> usefulNodes1;
 			unordered_set<string> voie1;
-			forwardDfs(iNode, 0, dfsMaxDepth, visited1, usefulNodes1, voie1, seedVariables);
+			forwardDfs(iNode, 0, dfsMaxDepth, visited1, usefulNodes1, voie1, seedVariables, preventRevisting);
 			unordered_set<ICFGNode*> visited2;
 			unordered_set<ICFGNode*> usefulNodes2;
 			unordered_set<string> voie2;
-			backwardDfs(iNode, 0, dfsMaxDepth, visited2, usefulNodes2, voie2, seedVariables);
+			backwardDfs(iNode, 0, dfsMaxDepth, visited2, usefulNodes2, voie2, seedVariables, preventRevisting);
 			
 			usefulNodes1.insert(usefulNodes2.begin(), usefulNodes2.end());
 			voie1.insert(voie2.begin(), voie2.end());
@@ -145,7 +142,7 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 			counter++;
 		}
 	}
-	SVFUtil::outs() << "Total number of Edges: " << totalEdgeNum << "\n";
+	
 
 	SVFUtil::outs() << "Starting Maximal VOI components" << "\n";
 	int maxNumVOIE = 0;
@@ -158,10 +155,58 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 
 	SVFUtil::outs() << "Depth: " << dfsMaxDepth << "\n";
 	SVFUtil::outs() << "Max VOI in components: " << maxNumVOIE << "\n";
+
+	auto end = chrono::high_resolution_clock::now();
+	double time_taken = chrono::duration_cast<chrono::nanoseconds>(end - start).count();
+	time_taken *= 1e-9;
+	cout << "Time taken by iterativeDeepeningPathFinder function is : " << fixed << time_taken << setprecision(9) << " sec " << endl;
+	if (!preventRevisting) {
+		SVFUtil::outs() << "EXHAUSTIVE" << "\n";
+	}
+
+	return maxNumVOIE;
+}
+
+void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
+	int maxNumVOIEPossible = seedVariables.size();
+	// Binary search
+	int maxVOIEUntilNow = -1;
+
+	int currentDepth = 2;
+	while (maxVOIEUntilNow != seedVariables.size()) {
+		map<ICFGNode*, unordered_set<ICFGNode*>> nodeOfInterestComponent;
+		map<ICFGNode*, unordered_set<string>> varOfInterestInComponent;
+
+		maxVOIEUntilNow = iterativeDeepeningPathFinder(icfg, seedVariables, nodeOfInterestComponent, varOfInterestInComponent, currentDepth, true);
+		currentDepth *= 2;
+	}
+
+	int lowerDepth = currentDepth / 4;
+	int upperDepth = currentDepth / 2;
+	int maxVOIECurrent = -1;
+
+	while (lowerDepth != upperDepth) {
+		map<ICFGNode*, unordered_set<ICFGNode*>> nodeOfInterestComponent;
+		map<ICFGNode*, unordered_set<string>> varOfInterestInComponent;
+
+		currentDepth = (lowerDepth + upperDepth) / 2;
+		maxVOIECurrent = iterativeDeepeningPathFinder(icfg, seedVariables, nodeOfInterestComponent, varOfInterestInComponent, currentDepth, true);
+		if (maxVOIECurrent < maxNumVOIEPossible) {
+			lowerDepth = currentDepth + 1;
+		} else {
+			upperDepth = currentDepth;
+		}
+	}
+
+	map<ICFGNode*, unordered_set<ICFGNode*>> nodeOfInterestComponent;
+	map<ICFGNode*, unordered_set<string>> varOfInterestInComponent;
+
+	iterativeDeepeningPathFinder(icfg, seedVariables, nodeOfInterestComponent, varOfInterestInComponent, upperDepth, false);
+
 	unordered_set<ICFGNode*> nodesToKeep;
 	for (map<ICFGNode*, unordered_set<string>>::iterator it = varOfInterestInComponent.begin(); it!=varOfInterestInComponent.end(); it++) {
 		int componentNumVOI = it->second.size();
-		if (maxNumVOIE == componentNumVOI) {
+		if (maxNumVOIEPossible == componentNumVOI) {
 			unordered_set<ICFGNode*> component = nodeOfInterestComponent[it->first];
 			SVFUtil::outs() << it->first << " ";
 			for (string varName: it->second) SVFUtil::outs() << varName << " ";
@@ -173,8 +218,10 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 	SVFUtil::outs() << "Removal Started" << "\n";
 	unordered_set<ICFGNode*> nodesToRemove;
 	int nodeKeepCount = 0;
+	int totalEdgeNum = 0;
 	for(ICFG::iterator i = icfg->begin(); i != icfg->end(); i++) {
 		ICFGNode* iNode = i->second;
+		totalEdgeNum += iNode->getInEdges().size();
 		if (nodesToKeep.find(iNode) == nodesToKeep.end()) {
 			nodesToRemove.insert(iNode);
 		} else {
@@ -182,6 +229,9 @@ void pruneICFGNodes(ICFG* icfg, unordered_set<string>& seedVariables) {
 		}
 	}
 
+
+	SVFUtil::outs() << "Total number of Nodes: " << icfg->getTotalNodeNum() << "\n";
+	SVFUtil::outs() << "Total number of Edges: " << totalEdgeNum << "\n";
 	SVFUtil::outs() << "Number of Nodes to keep: " << nodesToKeep.size() << "\n";
 	SVFUtil::outs() << "Number of Edges to keep: " << nodeKeepCount << "\n";
 	SVFUtil::outs() << "Number of Nodes to remove: " << nodesToRemove.size() << "\n";
@@ -222,17 +272,7 @@ int main(int argc, char ** argv) {
 	opCodeRelevantOperand = {{Instruction::Alloca, -1}, {Instruction::Load, -1}, {Instruction::Store, 1}, {Instruction::GetElementPtr, -1}};
 
 	unordered_set<string> seedVariables = getSeedVariableNamesFromFile(argv[2]);
-	// time_t start, end;
-	// time(&start);
-	auto start = chrono::high_resolution_clock::now();
-	ios_base::sync_with_stdio(false);
 	pruneICFGNodes(icfg, seedVariables);
-	// time(&end);
-	auto end = chrono::high_resolution_clock::now();
-	// double time_taken = double(end-start);
-	double time_taken = chrono::duration_cast<chrono::nanoseconds>(end - start).count();
-	time_taken *= 1e-9;
-	cout << "Time taken by pruneICFGNodes function is : " << fixed << time_taken << setprecision(9) << " sec " << endl;
 
 	SVFUtil::outs() << "Dumping" << "\n";
 	icfg->dump("ICFG-dfs29-useful-prune-exhaustive");
