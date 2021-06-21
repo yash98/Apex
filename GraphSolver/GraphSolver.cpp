@@ -228,7 +228,7 @@ int iterativeDeepeningPathFinder(ICFG* icfg, unordered_set<string>& seedVariable
 		}
 	}
 
-	SVFUtil::outs() << "DEPTH: " << dfsMaxDepth << "\n";
+	SVFUtil::outs() << "DEPTH: " << dfsMaxDepth << " " << type << "\n";
 	SVFUtil::outs() << "MAX VOI: " << maxNumVOIE << "\n";
 
 	auto end = chrono::high_resolution_clock::now();
